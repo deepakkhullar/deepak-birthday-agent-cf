@@ -27,7 +27,7 @@ binding: this.env.AI
 });
 
 const result = streamText({
-model: workersai("@cf/moonshotai/kimi-k2.7-code", {
+model: workersai("@cf/zai-org/glm-4.7-flash", {
 sessionAffinity: this.sessionAffinity
 }),
 
