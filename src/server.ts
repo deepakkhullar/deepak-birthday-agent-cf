@@ -1,7 +1,11 @@
 // Trigger Cloudflare rebuild
+
 import { createWorkersAI } from "workers-ai-provider";
 import { routeAgentRequest } from "agents";
-import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
+import {
+AIChatAgent,
+type OnChatMessageOptions
+} from "@cloudflare/ai-chat";
 import {
 convertToModelMessages,
 pruneMessages,
@@ -76,7 +80,6 @@ return eventInfo;
 })
 },
 
-// Allow the model to call the tool and then formulate an answer
 stopWhen: stepCountIs(10),
 
 abortSignal: options?.abortSignal
