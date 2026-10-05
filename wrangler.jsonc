@@ -1,33 +1,120 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agent-starter",
-  "main": "src/server.ts",
-  "compatibility_date": "2026-06-11",
-  "compatibility_flags": ["nodejs_compat"],
-  "ai": { "binding": "AI", "remote": true },
-"observability": {
-"enabled": true,
-"traces": {
-"enabled": true
+// Trigger Cloudflare rebuild
+
+import { createWorkersAI } from "workers-ai-provider";
+import { routeAgentRequest } from "agents";
+import { wrapAISDK } from "agents/observability/ai";
+
+import {
+AIChatAgent,
+type OnChatMessageOptions
+} from "@cloudflare/ai-chat";
+
+import * as ai from "ai";
+
+import {
+convertToModelMessages,
+pruneMessages,
+stepCountIs,
+tool
+} from "ai";
+
+import { z } from "zod";
+
+
+// Add detailed tracing for model calls and tool calls
+const tracedAI = wrapAISDK(ai, {
+storeMessages: true,
+storeTools: true
+});
+
+
+export class ChatAgent extends AIChatAgent<Env> {
+// Persist conversation history
+maxPersistedMessages = 100;
+
+// Recover interrupted chat sessions
+chatRecovery = true;
+
+
+async onChatMessage(
+_onFinish: unknown,
+options?: OnChatMessageOptions
+) {
+const workersai = createWorkersAI({
+binding: this.env.AI
+});
+
+
+const result = tracedAI.streamText({
+model: workersai("@cf/zai-org/glm-4.7-flash", {
+sessionAffinity: this.sessionAffinity
+}),
+
+system: `You are the assistant for Deepak's 50th birthday website.
+
+For every question about the birthday event, use the getEventInfo tool.
+
+Answer only using information returned by getEventInfo.
+
+If the venue is "TBD", answer "TBD" exactly.
+
+Do not turn "TBD" into "I do not know".
+
+Do not guess or invent any birthday-event details.
+
+Keep answers concise and friendly.`,
+
+messages: pruneMessages({
+messages: await convertToModelMessages(this.messages),
+toolCalls: "before-last-2-messages",
+reasoning: "before-last-message"
+}),
+
+tools: {
+getEventInfo: tool({
+description:
+"Get the official details for Deepak's 50th birthday party, including the date, venue, and what guests should expect.",
+
+inputSchema: z.object({}),
+
+execute: async () => {
+const response = await fetch(
+"https://leym7y6u38.execute-api.us-west-2.amazonaws.com/event-info"
+);
+
+if (!response.ok) {
+return {
+error: `Unable to retrieve event information. HTTP status: ${response.status}`
+};
 }
+
+const eventInfo = await response.json();
+
+return eventInfo;
+}
+})
 },
-  "assets": {
-    "directory": "./public",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/agents/*", "/oauth/*"]
-  },
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "ChatAgent",
-        "name": "ChatAgent"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "new_sqlite_classes": ["ChatAgent"],
-      "tag": "v1"
-    }
-  ]
+
+// Allow model -> tool -> model execution
+stopWhen: stepCountIs(10),
+
+abortSignal: options?.abortSignal
+});
+
+
+return result.toUIMessageStreamResponse();
 }
+}
+
+
+export default {
+async fetch(request: Request, env: Env) {
+return (
+(await routeAgentRequest(request, env)) ||
+new Response("Not found", {
+status: 404
+})
+);
+}
+} satisfies ExportedHandler<Env>;
+
